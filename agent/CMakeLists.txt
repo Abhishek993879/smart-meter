@@ -7,6 +7,10 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(Threads REQUIRED)
 
-add_executable(energy-agent src/main.cpp)
+add_executable(energy-agent
+    src/main.cpp
+    src/Logger.cpp
+    src/Config.cpp
+)
 target_include_directories(energy-agent PRIVATE include)
 target_link_libraries(energy-agent PRIVATE Threads::Threads)

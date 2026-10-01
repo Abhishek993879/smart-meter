@@ -3,3 +3,4 @@ build/
 *.ko
 *.mod*
 *.db
+*.log
