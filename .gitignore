@@ -4,3 +4,7 @@ build/
 *.mod*
 *.db
 *.log
+.*.cmd
+Module.symvers
+modules.order
+driver/pulsecnt_ctl
