@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Meter Dashboard</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
+          --accent:#38bdf8; --ok:#22c55e; --bad:#ef4444; --line:#334155; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 24px; border-bottom:1px solid var(--line);
+           display:flex; justify-content:space-between; align-items:center; }
+  h1 { font-size:1.15rem; margin:0; }
+  #conn { font-size:.85rem; color:var(--muted); }
+  #conn.up::before   { content:"● "; color:var(--ok); }
+  #conn.down::before { content:"● "; color:var(--bad); }
+  main { max-width:1000px; margin:0 auto; padding:24px; display:grid; gap:16px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:16px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; }
+  .label { color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; }
+  .value { font-size:2rem; font-weight:700; margin-top:4px; }
+  .unit { font-size:.95rem; color:var(--muted); margin-left:4px; font-weight:400; }
+  .ok { color:var(--ok); } .alert { color:var(--bad); }
+  .chartbox { position:relative; height:320px; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  .row { display:flex; justify-content:space-between; align-items:baseline; }
+  ul { margin:8px 0 0; padding-left:18px; } li { margin:4px 0; } .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Smart Energy Meter</h1>
+  <span id="conn" class="down">connecting...</span>
+</header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="label">Power</div>
+      <div class="value"><span id="watts">--</span><span class="unit">W</span></div></div>
+    <div class="card"><div class="label">Energy (since start)</div>
+      <div class="value"><span id="kwh">--</span><span class="unit">kWh</span></div></div>
+    <div class="card"><div class="label">Cost</div>
+      <div class="value"><span id="cost">--</span></div></div>
+    <div class="card"><div class="label">Peak</div>
+      <div class="value"><span id="peak">--</span><span class="unit">W</span></div></div>
+    <div class="card"><div class="label">Status</div>
+      <div id="status" class="value ok">--</div></div>
+  </div>
+
+  <div class="card">
+    <div class="label">Power history</div>
+    <div class="chartbox"><canvas id="chart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><span class="label">Simulated load</span>
+      <strong id="loadValue">-- W</strong></div>
+    <input id="load" type="range" min="100" max="5000" step="100" value="1500">
+    <div id="loadMsg" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <div class="label">Alerts</div>
+    <ul id="alerts"><li class="muted">Loading...</li></ul>
+  </div>
+</main>
+
+<script src="chart.umd.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let sliderInitialised = false;
+
+const chart = new Chart($('chart'), {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Power (W)', data: [], borderColor: '#38bdf8',
+    backgroundColor: 'rgba(56,189,248,.15)', fill: true,
+    tension: .25, pointRadius: 0, borderWidth: 2 }] },
+  options: {
+    animation: false, maintainAspectRatio: false,
+    scales: {
+      x: { ticks: { color: '#94a3b8', maxTicksLimit: 8 }, grid: { color: '#334155' } },
+      y: { beginAtZero: true, ticks: { color: '#94a3b8' }, grid: { color: '#334155' } } },
+    plugins: { legend: { labels: { color: '#e2e8f0' } } }
+  }
+});
+
+async function getJson(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+function setConnected(up) {
+  const c = $('conn');
+  c.className = up ? 'up' : 'down';
+  c.textContent = up ? 'live' : 'server not reachable';
+}
+
+async function refreshLive() {
+  try {
+    const d = await getJson('/api/live');
+    $('watts').textContent = d.has_data ? d.watts.toFixed(0) : '--';
+    $('kwh').textContent   = d.has_data ? d.kwh_total.toFixed(4) : '--';
+    $('cost').textContent  = d.has_data ? d.cost.toFixed(2) : '--';
+    $('peak').textContent  = d.has_data ? d.peak_watts.toFixed(0) : '--';
+    const st = $('status');
+    st.textContent = !d.has_data ? '--' : (d.alert ? 'HIGH LOAD' : 'Normal');
+    st.className = 'value ' + (d.alert ? 'alert' : 'ok');
+    if (!sliderInitialised) {          // match the slider to the server once
+      $('load').value = d.load_watts;
+      $('loadValue').textContent = Math.round(d.load_watts) + ' W';
+      sliderInitialised = true;
+    }
+    setConnected(true);
+  } catch (e) { setConnected(false); }
+}
+
+async function refreshHistory() {
+  try {
+    const rows = await getJson('/api/history?limit=300');
+    chart.data.labels = rows.map(r => new Date(r.t).toLocaleTimeString());
+    chart.data.datasets[0].data = rows.map(r => r.watts);
+    chart.update('none');
+  } catch (e) { /* the connection indicator already shows problems */ }
+}
+
+async function refreshAlerts() {
+  try {
+    const rows = await getJson('/api/alerts?limit=20');
+    const ul = $('alerts');
+    ul.innerHTML = '';
+    if (rows.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'muted';
+      li.textContent = 'No alerts yet';
+      ul.appendChild(li);
+      return;
+    }
+    rows.slice().reverse().forEach(a => {      // newest first
+      const li = document.createElement('li');
+      li.textContent = new Date(a.t).toLocaleString() + '  -  ' + a.message;
+      ul.appendChild(li);
+    });
+  } catch (e) { }
+}
+
+$('load').addEventListener('input', e => {
+  $('loadValue').textContent = e.target.value + ' W';
+});
+$('load').addEventListener('change', async e => {
+  const watts = Number(e.target.value);
+  try {
+    const r = await fetch('/api/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watts })
+    });
+    $('loadMsg').textContent = r.ok ? 'Load set to ' + watts + ' W'
+                                    : 'The server rejected that value';
+  } catch (err) { $('loadMsg').textContent = 'Could not reach the server'; }
+});
+
+refreshLive(); refreshHistory(); refreshAlerts();
+setInterval(refreshLive, 1000);
+setInterval(refreshHistory, 2000);
+setInterval(refreshAlerts, 3000);
+</script>
+</body>
+</html>
