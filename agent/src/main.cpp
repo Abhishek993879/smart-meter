@@ -1,6 +1,18 @@
 #include <iostream>
+#include <thread>
+#include "ThreadSafeQueue.hpp"
 
 int main() {
-    std::cout << "energy-agent starting\n";
-    return 0;
+    ThreadSafeQueue<int> q;
+
+    std::thread consumer([&q] {
+        while (auto v = q.waitPop()) {
+            std::cout << "got " << *v << "\n";
+        }
+        std::cout << "consumer done\n";
+    });
+
+    for (int i = 1; i <= 5; ++i) q.push(i);
+    q.stop();
+    consumer.join();
 }
