@@ -14,6 +14,7 @@ add_library(agent_core STATIC
     src/Config.cpp
     src/AnalyticsEngine.cpp
     src/Storage.cpp
+    src/SimulatedPulseSource.cpp
 )
 target_include_directories(agent_core PUBLIC include)
 target_link_libraries(agent_core PUBLIC Threads::Threads SQLite::SQLite3)
@@ -28,6 +29,7 @@ find_package(GTest REQUIRED)
 add_executable(agent_tests
     tests/test_energy.cpp
     tests/test_storage.cpp
+    tests/test_source.cpp
 )
 target_link_libraries(agent_tests PRIVATE agent_core GTest::gtest_main)
 add_test(NAME agent_tests COMMAND agent_tests)
