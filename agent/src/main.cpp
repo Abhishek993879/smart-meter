@@ -10,8 +10,10 @@
 
 #include "AnalyticsEngine.hpp"
 #include "Config.hpp"
+#include "HttpServer.hpp"
 #include "Logger.hpp"
 #include "PulseEvent.hpp"
+#include "SharedState.hpp"
 #include "SimulatedPulseSource.hpp"
 #include "Storage.hpp"
 #include "ThreadSafeQueue.hpp"
@@ -32,7 +34,7 @@ int main(int argc, char* argv[]) {
     Logger::instance().openFile(config.getString("log_file", "energy-agent.log"));
 
     const int    ppk        = config.getInt("pulses_per_kwh", 3600);
-    const double windowSec  = config.getDouble("window_seconds", 30.0);
+    const double windowSec  = config.getDouble("window_seconds", 10.0);
     const double alertWatts = config.getDouble("alert_watts", 3000.0);
     const double simWatts   = config.getDouble("sim_watts", 1500.0);
 
@@ -47,10 +49,25 @@ int main(int argc, char* argv[]) {
 
     logInfo("energy-agent starting (simulated load " + std::to_string(simWatts) + " W)");
 
+    SharedState shared;
     ThreadSafeQueue<PulseEvent> eventQueue;
     ThreadSafeQueue<Reading> readingQueue;
-    std::unique_ptr<PulseSource> source =
-        std::make_unique<SimulatedPulseSource>(simWatts, ppk, g_running);
+
+    // Keep a pointer to the simulator so the dashboard can change its load
+    auto sim = std::make_unique<SimulatedPulseSource>(simWatts, ppk, g_running);
+    SimulatedPulseSource* simPtr = sim.get();
+    std::unique_ptr<PulseSource> source = std::move(sim);
+
+    ServerSettings web;
+    web.bindAddress      = config.getString("bind_address", "127.0.0.1");
+    web.port             = config.getInt("port", 8080);
+    web.webRoot          = config.getString("web_root", "web");
+    web.tariffPerKwh     = config.getDouble("tariff_per_kwh", 8.0);
+    web.alertWatts       = alertWatts;
+    web.initialLoadWatts = simWatts;
+
+    HttpServer server(web, storage, shared, [simPtr](double w) { simPtr->setWatts(w); });
+    if (!server.start()) return 1;     // start before the threads: easy to exit if it fails
 
     // Thread 1: get pulses from the source
     std::thread reader([&] {
@@ -59,10 +76,15 @@ int main(int argc, char* argv[]) {
         logInfo("reader thread stopped");
     });
 
-    // Thread 2: turn pulses into readings
+    // Thread 2: turn pulses into readings and publish the newest one
     std::thread analytics([&] {
         AnalyticsEngine engine(ppk, windowSec, alertWatts);
-        while (auto ev = eventQueue.waitPop()) readingQueue.push(engine.update(*ev));
+        while (auto ev = eventQueue.waitPop()) {
+            Reading r = engine.update(*ev);
+            shared.set(LiveState{true, r.timestamp_ns, r.watts, r.kwhTotal,
+                                 engine.peakWatts(), r.alert});
+            readingQueue.push(r);
+        }
         logInfo("analytics thread stopped");
     });
 
@@ -93,7 +115,8 @@ int main(int argc, char* argv[]) {
     while (g_running) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     logInfo("shutdown requested");
 
-    // Stop in pipeline order so every queued item is processed
+    // Stop in order: no new web requests, then the pipeline from front to back
+    server.stop();
     reader.join();
     eventQueue.stop();
     analytics.join();

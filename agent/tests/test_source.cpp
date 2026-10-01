@@ -24,3 +24,13 @@ TEST(SimulatedPulseSource, StopsWhenNotRunning) {
     PulseEvent e{};
     EXPECT_FALSE(source.next(e));
 }
+
+TEST(SimulatedPulseSource, LoadChangeTakesEffectQuickly) {
+    std::atomic<bool> running{true};
+    SimulatedPulseSource source(1.0, 1000, running);   // very slow: one pulse per hour
+    source.setWatts(360000.0);                         // now one pulse per 10 ms
+
+    PulseEvent e{};
+    ASSERT_TRUE(source.next(e));
+    EXPECT_EQ(e.count, 1u);
+}
