@@ -13,6 +13,10 @@ public:
 
     // Change the load while running. Safe to call from another thread.
     void setWatts(double watts);
+    bool setLoad(double watts) override {
+        setWatts(watts);
+        return true;
+    }
 
 private:
     std::chrono::nanoseconds currentInterval() const;

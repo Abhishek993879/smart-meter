@@ -10,6 +10,7 @@
 
 #include "AnalyticsEngine.hpp"
 #include "Config.hpp"
+#include "DevicePulseSource.hpp"
 #include "HttpServer.hpp"
 #include "Logger.hpp"
 #include "PulseEvent.hpp"
@@ -33,10 +34,10 @@ int main(int argc, char* argv[]) {
     }
     Logger::instance().openFile(config.getString("log_file", "energy-agent.log"));
 
-    const int    ppk        = config.getInt("pulses_per_kwh", 3600);
+    int          ppk        = config.getInt("pulses_per_kwh", 3600);
     const double windowSec  = config.getDouble("window_seconds", 10.0);
     const double alertWatts = config.getDouble("alert_watts", 3000.0);
-    const double simWatts   = config.getDouble("sim_watts", 1500.0);
+    double       loadWatts  = config.getDouble("sim_watts", 1500.0);
 
     Storage storage;
     if (!storage.open(config.getString("db_path", "energy.db"))) return 1;
@@ -47,16 +48,43 @@ int main(int argc, char* argv[]) {
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    logInfo("energy-agent starting (simulated load " + std::to_string(simWatts) + " W)");
+    // Choose where the pulses come from
+    const std::string sourceType = config.getString("source", "simulated");
+    std::unique_ptr<PulseSource> source;
+
+    if (sourceType == "device") {
+        const std::string path = config.getString("device_path", "/dev/pulsecnt");
+        auto dev = std::make_unique<DevicePulseSource>(path, g_running);
+        if (!dev->isOpen()) {
+            logError("Is the driver loaded? Try: scripts/driver_load.sh");
+            return 1;
+        }
+        // The driver knows its own meter constant and load: trust it over the config
+        unsigned devWatts = 0, devPpk = 0;
+        if (dev->readDriverSettings(devWatts, devPpk)) {
+            if (static_cast<int>(devPpk) != ppk) {
+                logWarn("pulses_per_kwh in the config (" + std::to_string(ppk) +
+                        ") differs from the driver's (" + std::to_string(devPpk) +
+                        "); using the driver's value");
+            }
+            ppk = static_cast<int>(devPpk);
+            loadWatts = devWatts;
+        } else {
+            logWarn("Could not read the driver settings; using values from the config");
+        }
+        source = std::move(dev);
+        logInfo("energy-agent starting (pulses from " + path + ")");
+    } else if (sourceType == "simulated") {
+        source = std::make_unique<SimulatedPulseSource>(loadWatts, ppk, g_running);
+        logInfo("energy-agent starting (simulated load " + std::to_string(loadWatts) + " W)");
+    } else {
+        logError("Unknown source '" + sourceType + "' (use 'simulated' or 'device')");
+        return 1;
+    }
 
     SharedState shared;
     ThreadSafeQueue<PulseEvent> eventQueue;
     ThreadSafeQueue<Reading> readingQueue;
-
-    // Keep a pointer to the simulator so the dashboard can change its load
-    auto sim = std::make_unique<SimulatedPulseSource>(simWatts, ppk, g_running);
-    SimulatedPulseSource* simPtr = sim.get();
-    std::unique_ptr<PulseSource> source = std::move(sim);
 
     ServerSettings web;
     web.bindAddress      = config.getString("bind_address", "127.0.0.1");
@@ -64,9 +92,10 @@ int main(int argc, char* argv[]) {
     web.webRoot          = config.getString("web_root", "web");
     web.tariffPerKwh     = config.getDouble("tariff_per_kwh", 8.0);
     web.alertWatts       = alertWatts;
-    web.initialLoadWatts = simWatts;
+    web.initialLoadWatts = loadWatts;
 
-    HttpServer server(web, storage, shared, [simPtr](double w) { simPtr->setWatts(w); });
+    PulseSource* src = source.get();
+    HttpServer server(web, storage, shared, [src](double w) { return src->setLoad(w); });
     if (!server.start()) return 1;     // start before the threads: easy to exit if it fails
 
     // Thread 1: get pulses from the source
@@ -74,6 +103,7 @@ int main(int argc, char* argv[]) {
         PulseEvent ev{};
         while (source->next(ev)) eventQueue.push(ev);
         logInfo("reader thread stopped");
+        g_running = false;   // if the source ended on its own, stop the whole agent
     });
 
     // Thread 2: turn pulses into readings and publish the newest one

@@ -100,7 +100,11 @@ bool HttpServer::start() {
                                {"error", "watts must be between 100 and 10000"}}, 400);
             return;
         }
-        setLoad_(w);
+        if (!setLoad_(w)) {
+            sendJson(res, json{{"ok", false},
+                               {"error", "the pulse source could not change its load"}}, 409);
+            return;
+        }
         loadWatts_ = w;
         logInfo("Load changed from the dashboard: " + std::to_string(static_cast<int>(w)) + " W");
         sendJson(res, json{{"ok", true}, {"watts", w}});

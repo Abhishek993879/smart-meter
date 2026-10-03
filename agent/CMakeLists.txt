@@ -17,8 +17,10 @@ add_library(agent_core STATIC
     src/Storage.cpp
     src/SimulatedPulseSource.cpp
     src/HttpServer.cpp
+    src/DevicePulseSource.cpp
 )
-target_include_directories(agent_core PUBLIC include)
+# ../driver holds pulsecnt_ioctl.h, shared with the kernel module
+target_include_directories(agent_core PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}/../driver)
 # SYSTEM: warnings inside the third-party header are not our problem
 target_include_directories(agent_core SYSTEM PRIVATE third_party)
 target_link_libraries(agent_core
@@ -37,6 +39,7 @@ add_executable(agent_tests
     tests/test_storage.cpp
     tests/test_source.cpp
     tests/test_state.cpp
+    tests/test_device.cpp
 )
 target_link_libraries(agent_tests PRIVATE agent_core GTest::gtest_main)
 add_test(NAME agent_tests COMMAND agent_tests)

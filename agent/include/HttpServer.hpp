@@ -20,7 +20,7 @@ struct ServerSettings {
 // Serves the dashboard files and a small JSON API on its own thread.
 class HttpServer {
 public:
-    using SetLoadFn = std::function<void(double)>;
+    using SetLoadFn = std::function<bool(double)>;   // false if the source cannot do it
 
     HttpServer(const ServerSettings& settings, Storage& storage,
                SharedState& state, SetLoadFn setLoad);
